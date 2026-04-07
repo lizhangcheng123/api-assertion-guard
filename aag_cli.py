@@ -60,6 +60,18 @@ def main():
         default=10,
         help='改进建议最多展示文件数（默认10）',
     )
+    parser.add_argument(
+        '--fail-under',
+        type=float,
+        default=None,
+        help='平均分低于此阈值时返回非零退出码（用于 CI 门禁，如: --fail-under 40）',
+    )
+    parser.add_argument(
+        '--max-critical',
+        type=int,
+        default=None,
+        help='严重问题数超过此值时返回非零退出码（用于 CI 门禁，如: --max-critical 10）',
+    )
 
     args = parser.parse_args()
 
@@ -95,58 +107,61 @@ def main():
     if args.detail:
         _print_detail(file_analyses, project_score)
 
-    # 6. 改进建议
+    # 6. 改进建议（统一生成一次）
+    suggestions = None
+    if args.suggest or args.suggest_output or args.html:
+        suggester = AssertionSuggester()
+        sorted_analyses = sorted(
+            file_analyses,
+            key=lambda fa: next(
+                (fs.total for fs in project_score.file_scores if fs.file_path == fa.test_file.file_path), 100
+            )
+        )
+        suggestions = []
+        files_with_suggestions = 0
+        for fa in sorted_analyses:
+            if files_with_suggestions >= args.suggest_limit:
+                break
+            suggs = suggester.suggest_for_file(fa)
+            if suggs:
+                suggestions.extend(suggs)
+                files_with_suggestions += 1
+
     if args.suggest or args.suggest_output:
-        _print_suggestions(file_analyses, project_score, args)
+        _print_suggestions(suggestions, args)
 
     # 7. HTML 报告
     if args.html:
         html_reporter = HtmlReporter()
-        # 如果开启了 suggest，把建议也加入 HTML
-        suggestions = None
-        if args.suggest or args.suggest_output:
-            suggester = AssertionSuggester()
-            suggestions = []
-            for fa in file_analyses:
-                suggestions.extend(suggester.suggest_for_file(fa))
         output = html_reporter.report(project_score, file_analyses, args.html, suggestions)
         print(f"\n📄 HTML 报告已生成: {os.path.abspath(output)}")
+
+    # 8. 行动引导
+    _print_next_steps(project_score, args)
+
+    # 9. CI 门禁
+    if args.fail_under is not None and project_score.avg_score < args.fail_under:
+        print(f"\n❌ CI 门禁未通过: 平均分 {project_score.avg_score} < 阈值 {args.fail_under}")
+        sys.exit(1)
+    if args.max_critical is not None and project_score.total_critical > args.max_critical:
+        print(f"\n❌ CI 门禁未通过: 严重问题 {project_score.total_critical} > 阈值 {args.max_critical}")
+        sys.exit(1)
 
     print()
 
 
-def _print_suggestions(file_analyses, project_score, args):
-    """生成并输出改进建议"""
-    suggester = AssertionSuggester()
-
-    # 按得分排序，优先处理最差的文件
-    sorted_analyses = sorted(
-        file_analyses,
-        key=lambda fa: next(
-            (fs.total for fs in project_score.file_scores if fs.file_path == fa.test_file.file_path), 100
-        )
-    )
-
-    all_suggestions = []
-    files_with_suggestions = 0
-
-    for fa in sorted_analyses:
-        if files_with_suggestions >= args.suggest_limit:
-            break
-        suggs = suggester.suggest_for_file(fa)
-        if suggs:
-            all_suggestions.extend(suggs)
-            files_with_suggestions += 1
-
+def _print_suggestions(all_suggestions, args):
+    """输出改进建议"""
     if not all_suggestions:
         print("\n✅ 未发现需要改进的断言")
         return
 
     # 构建 Markdown 输出
+    files_set = set(s['file'] for s in all_suggestions)
     lines = [
         "# API 断言改进建议",
         "",
-        f"共 {len(all_suggestions)} 条建议（来自得分最低的 {files_with_suggestions} 个文件）",
+        f"共 {len(all_suggestions)} 条建议（来自得分最低的 {len(files_set)} 个文件）",
         "",
         "---",
         "",
@@ -183,7 +198,6 @@ def _print_suggestions(file_analyses, project_score, args):
             f.write(content)
         print(f"\n💡 改进建议已保存: {os.path.abspath(args.suggest_output)}")
     else:
-        # 终端输出
         try:
             from rich.console import Console
             from rich.markdown import Markdown
@@ -192,6 +206,26 @@ def _print_suggestions(file_analyses, project_score, args):
             console.print(Markdown(content))
         except ImportError:
             print(content)
+
+
+def _print_next_steps(project_score, args):
+    """在报告末尾打印行动引导"""
+    hints = []
+    if not args.suggest and not args.suggest_output:
+        hints.append("运行 --suggest 生成具体改进建议")
+    if not args.detail:
+        hints.append("运行 --detail 查看每个文件的用例级详情")
+    if not args.html:
+        hints.append("运行 --html report.html 生成可分享的 HTML 报告")
+
+    if project_score.worst_files:
+        worst = project_score.worst_files[0]
+        hints.append(f"最优先修复: {worst.rel_path} (得分 {worst.total}, {worst.critical_count} 个严重问题)")
+
+    if hints:
+        print("\n💡 下一步:")
+        for h in hints:
+            print(f"   {h}")
 
 
 def _print_detail(file_analyses, project_score):

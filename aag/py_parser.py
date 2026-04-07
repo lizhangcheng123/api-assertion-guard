@@ -190,5 +190,5 @@ class PyTestParser:
         return {
             'py_bonus': min(py_bonus, 35),
             'field_coverage_bonus': min(field_bonus, 60),
-            'business_logic_bonus': min(business_bonus, 70),
+            'business_logic_bonus': min(business_bonus, 40),
         }

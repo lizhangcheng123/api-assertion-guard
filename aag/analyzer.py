@@ -86,21 +86,22 @@ class AssertionAnalyzer:
         # 3. 业务逻辑验证评分
         ca.business_logic_score = self._score_business_logic(tc, fa)
 
-        # 4. 应用 .py 文件加分（用 max 保底，确保 .py 断言被充分反映）
+        # 4. 应用 .py 文件加分
+        # 原则：.py 是锦上添花，加分上限 = max(YAML基础分*2, 25)
         if fa.py_info and not fa.py_info.is_template_only:
             py_scores = self.py_parser.score_py_assertions(fa.py_info)
-            # 断言类型：.py 有实质断言至少等同于中等 custom_check
+            # 断言类型
             ca.check_type_score = min(ca.check_type_score + py_scores['py_bonus'], 100)
-            # 字段覆盖：取 YAML 分数 + py 加分，但保底不低于 py 加分本身
+            # 字段覆盖
+            field_cap = max(ca.field_coverage_score * 2, 25)
             ca.field_coverage_score = min(
-                max(ca.field_coverage_score + py_scores['field_coverage_bonus'],
-                    py_scores['field_coverage_bonus']),
+                ca.field_coverage_score + min(py_scores['field_coverage_bonus'], field_cap),
                 100
             )
-            # 业务逻辑：同上
+            # 业务逻辑
+            biz_cap = max(ca.business_logic_score * 2, 25)
             ca.business_logic_score = min(
-                max(ca.business_logic_score + py_scores['business_logic_bonus'],
-                    py_scores['business_logic_bonus']),
+                ca.business_logic_score + min(py_scores['business_logic_bonus'], biz_cap),
                 100
             )
 
@@ -115,12 +116,27 @@ class AssertionAnalyzer:
         scores = {
             'no_check': 0,
             'check_code': 20,
-            'check_json': 50,
+            'check_json': self._score_check_json_type(tc),
             'regular_check': 55,
             'entirely_check': 80,
             'custom_check': self._score_custom_check(tc),
         }
         return scores.get(tc.check_type, 0)
+
+    def _score_check_json_type(self, tc: TestCase) -> int:
+        """check_json 的断言类型分根据字段数动态计算"""
+        er = tc.expected_result
+        if not isinstance(er, dict):
+            return 30
+        fields = set(er.keys())
+        if fields <= {'code', 'msg', 'message'}:
+            return 30  # 只有 code+msg，接近 check_code 的实质
+        elif len(fields) <= 4:
+            return 45
+        elif len(fields) <= 8:
+            return 60
+        else:
+            return 70
 
     def _score_custom_check(self, tc: TestCase) -> int:
         """分析 custom_check 的实际断言深度"""
