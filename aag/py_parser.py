@@ -42,8 +42,13 @@ class PyTestParser:
 
     def parse(self, py_path: str) -> PyAssertionInfo:
         """解析 .py 文件，提取断言信息"""
-        with open(py_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+        try:
+            with open(py_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except (IOError, UnicodeDecodeError) as e:
+            import sys
+            print(f"  警告: 无法读取 {py_path}: {e}", file=sys.stderr)
+            return PyAssertionInfo()
 
         info = PyAssertionInfo()
 

@@ -89,7 +89,7 @@ def main():
 
     # 4. 终端报告
     terminal = TerminalReporter()
-    terminal.report(project_score)
+    terminal.report(project_score, file_analyses)
 
     # 5. 详细模式
     if args.detail:

@@ -158,10 +158,19 @@ class AssertionScorer:
         return cs
 
     def _calc_scenario_score(self, ca: CaseAnalysis, fa: FileAnalysis) -> int:
-        """计算场景覆盖分"""
-        score = 50  # 基础分（正常场景存在）
-
+        """计算场景覆盖分，基础分与断言类型挂钩"""
         tc = ca.test_case
+
+        # 基础分根据断言类型动态给予
+        base_scores = {
+            'no_check': 0,
+            'check_code': 20,
+            'check_json': 40,
+            'regular_check': 40,
+            'entirely_check': 50,
+            'custom_check': 50,
+        }
+        score = base_scores.get(tc.check_type, 30)
 
         # 异常场景：期望非 200 或非 code=0
         if tc.expected_code != 200:

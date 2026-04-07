@@ -38,13 +38,13 @@ class TerminalReporter:
         except ImportError:
             self._rich_available = False
 
-    def report(self, ps: ProjectScore):
+    def report(self, ps: ProjectScore, file_analyses=None):
         if self._rich_available:
-            self._rich_report(ps)
+            self._rich_report(ps, file_analyses)
         else:
-            self._plain_report(ps)
+            self._plain_report(ps, file_analyses)
 
-    def _rich_report(self, ps: ProjectScore):
+    def _rich_report(self, ps: ProjectScore, file_analyses=None):
         from rich.table import Table
         from rich.panel import Panel
         from rich import box
@@ -156,6 +156,11 @@ class TerminalReporter:
         c.print("[bold red]严重弱断言问题汇总[/bold red]")
         c.print()
 
+        # 构建 file_path → FileAnalysis 映射
+        fa_map = {}
+        if file_analyses:
+            fa_map = {fa.test_file.file_path: fa for fa in file_analyses}
+
         shown = 0
         for fs in sorted(ps.file_scores, key=lambda x: x.total):
             if fs.critical_count == 0:
@@ -169,17 +174,22 @@ class TerminalReporter:
             color = GRADE_COLORS[fs.grade]
             c.print(f"  [{color}]{fs.grade}[/{color}] [bold]{fs.rel_path}[/bold]  得分: [{color}]{fs.total}[/{color}]")
 
-            # 收集该文件所有弱断言
-            weak_msgs = set()
-            for cs in fs.case_scores:
-                # 需要从 FileAnalysis 回溯弱模式，这里用 score 信息推断
-                pass
+            # 从 FileAnalysis 获取弱断言详情
+            fa = fa_map.get(fs.file_path)
+            if fa:
+                seen = set()
+                for ca in fa.case_analyses:
+                    for wp in ca.weak_patterns:
+                        if wp.severity == 'critical' and wp.message not in seen:
+                            seen.add(wp.message)
+                            c.print(f"    [red]  [{wp.code}][/red] {wp.message}")
+            c.print()
 
             shown += 1
 
         c.print()
 
-    def _plain_report(self, ps: ProjectScore):
+    def _plain_report(self, ps: ProjectScore, file_analyses=None):
         """无 rich 库时的纯文本报告"""
         print()
         print("=" * 60)
