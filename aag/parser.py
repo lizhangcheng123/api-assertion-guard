@@ -2,9 +2,12 @@
 """YAML 测试文件解析器"""
 
 import os
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
 from ruamel.yaml import YAML
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,7 +55,7 @@ class YamlTestParser:
                         if tf and tf.test_cases:
                             test_files.append(tf)
                     except Exception as e:
-                        print(f"  跳过解析失败的文件: {full_path} ({e})")
+                        logger.warning("跳过解析失败的文件: %s (%s)", full_path, e)
         return test_files
 
     def parse_file(self, file_path: str, base_path: str = "") -> Optional[TestFile]:
@@ -86,7 +89,7 @@ class YamlTestParser:
                 summary=case.get('summary', ''),
                 describe=case.get('describe', ''),
                 tags=list(case.get('tags', [])),
-                parameter=case.get('parameter', {}),
+                parameter=case.get('parameter') or {},
                 check_type=check_body.get('check_type', 'no_check'),
                 expected_code=check_body.get('expected_code', 200),
                 expected_result=check_body.get('expected_result'),

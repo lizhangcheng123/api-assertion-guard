@@ -111,11 +111,10 @@ def main():
     suggestions = None
     if args.suggest or args.suggest_output or args.html:
         suggester = AssertionSuggester()
+        score_map = {fs.file_path: fs.total for fs in project_score.file_scores}
         sorted_analyses = sorted(
             file_analyses,
-            key=lambda fa: next(
-                (fs.total for fs in project_score.file_scores if fs.file_path == fa.test_file.file_path), 100
-            )
+            key=lambda fa: score_map.get(fa.test_file.file_path, 100)
         )
         suggestions = []
         files_with_suggestions = 0
@@ -237,8 +236,9 @@ def _print_detail(file_analyses, project_score):
 
         console.print("\n[bold]📋 详细分析[/bold]\n")
 
+        fs_map = {f.file_path: f for f in project_score.file_scores}
         for fa in sorted(file_analyses, key=lambda x: x.test_file.rel_path):
-            fs = next((f for f in project_score.file_scores if f.file_path == fa.test_file.file_path), None)
+            fs = fs_map.get(fa.test_file.file_path)
             if not fs:
                 continue
 

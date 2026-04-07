@@ -19,6 +19,45 @@ class WeakPattern:
     suggestion: str  # 改进建议
 
 
+# ── 评分常量 ──────────────────────────────────────────────
+
+# 仅含 code/msg 的字段集合
+ONLY_CODE_MSG_FIELDS = frozenset({'code', 'msg', 'message'})
+
+# check_json 动态评分阈值
+CHECK_JSON_SCORES = {
+    'code_msg_only': 30,
+    'few_fields': 45,       # ≤4 字段
+    'moderate_fields': 60,  # ≤8 字段
+    'many_fields': 70,      # >8 字段
+}
+
+# 字段覆盖率
+FIELD_COVERAGE_SCORES = {
+    'entirely_check': 90,
+    'regular_check': 30,
+    'check_code': 5,
+    'json_code_msg': 20,
+    'json_few': 40,
+    'json_moderate': 60,
+    'json_many': 80,
+}
+
+# 业务逻辑分值
+BIZ_SCORES = {
+    'check_db': 40,
+    'check_code': 10,
+    'has_code_field': 15,
+    'extra_fields': 15,
+    'data_layer': 20,
+    'search_records': 25,
+    'search_len': 15,
+    'create_id': 25,
+    'pagination': 20,
+    'error_code': 15,
+}
+
+
 # 接口类型关键词
 SEARCH_KEYWORDS = ['search', 'list', 'query', 'find', 'get', 'all', 'page']
 CREATE_KEYWORDS = ['add', 'create', 'insert', 'save', 'register', 'import']
@@ -30,7 +69,7 @@ PAGINATION_KEYWORDS = ['pageNo', 'pageSize', 'page_no', 'page_size', 'offset', '
 @dataclass
 class CaseAnalysis:
     """单个用例的分析结果"""
-    test_case: TestCase = None
+    test_case: Optional[TestCase] = None
     weak_patterns: List[WeakPattern] = field(default_factory=list)
     check_type_score: int = 0       # 断言类型强度 (0-100)
     field_coverage_score: int = 0   # 字段覆盖率 (0-100)
@@ -41,7 +80,7 @@ class CaseAnalysis:
 @dataclass
 class FileAnalysis:
     """文件级分析结果"""
-    test_file: TestFile = None
+    test_file: Optional[TestFile] = None
     case_analyses: List[CaseAnalysis] = field(default_factory=list)
     api_type: str = ""  # search/create/update/delete/other
     has_pagination: bool = False
@@ -127,16 +166,16 @@ class AssertionAnalyzer:
         """check_json 的断言类型分根据字段数动态计算"""
         er = tc.expected_result
         if not isinstance(er, dict):
-            return 30
+            return CHECK_JSON_SCORES['code_msg_only']
         fields = set(er.keys())
-        if fields <= {'code', 'msg', 'message'}:
-            return 30  # 只有 code+msg，接近 check_code 的实质
+        if fields <= ONLY_CODE_MSG_FIELDS:
+            return CHECK_JSON_SCORES['code_msg_only']
         elif len(fields) <= 4:
-            return 45
+            return CHECK_JSON_SCORES['few_fields']
         elif len(fields) <= 8:
-            return 60
+            return CHECK_JSON_SCORES['moderate_fields']
         else:
-            return 70
+            return CHECK_JSON_SCORES['many_fields']
 
     def _score_custom_check(self, tc: TestCase) -> int:
         """分析 custom_check 的实际断言深度"""
@@ -211,16 +250,14 @@ class AssertionAnalyzer:
             return 0
 
         fields = set(expected_result.keys())
-        only_code_msg = fields <= {'code', 'msg', 'message'}
-
-        if only_code_msg:
-            return 20  # 只验证 code+msg，覆盖率低但不是零
+        if fields <= ONLY_CODE_MSG_FIELDS:
+            return FIELD_COVERAGE_SCORES['json_code_msg']
         elif len(fields) <= 4:
-            return 40
+            return FIELD_COVERAGE_SCORES['json_few']
         elif len(fields) <= 8:
-            return 60
+            return FIELD_COVERAGE_SCORES['json_moderate']
         else:
-            return 80
+            return FIELD_COVERAGE_SCORES['json_many']
 
     def _count_custom_fields(self, expected_result) -> int:
         """统计 custom_check 中涉及的字段"""
@@ -261,13 +298,13 @@ class AssertionAnalyzer:
 
         # 如果有数据库校验，大幅加分
         if tc.has_check_db:
-            score += 40
+            score += BIZ_SCORES['check_db']
 
         if tc.check_type == 'no_check':
             return score
 
         if tc.check_type == 'check_code':
-            return score + 10  # 至少验证了 HTTP 状态码
+            return score + BIZ_SCORES['check_code']
 
         er = tc.expected_result
         if not er:
@@ -277,13 +314,12 @@ class AssertionAnalyzer:
         if tc.check_type == 'check_json' and isinstance(er, dict):
             fields = set(er.keys())
             if 'code' in fields:
-                score += 15  # 验证了业务码
+                score += BIZ_SCORES['has_code_field']
 
-            only_code_msg = fields <= {'code', 'msg', 'message'}
-            if not only_code_msg:
-                score += 15  # 验证了额外业务字段
+            if not fields <= ONLY_CODE_MSG_FIELDS:
+                score += BIZ_SCORES['extra_fields']
             if 'data' in er and isinstance(er.get('data'), dict):
-                score += 20  # 验证了 data 层
+                score += BIZ_SCORES['data_layer']
 
         if tc.check_type == 'custom_check' and isinstance(er, dict):
             python_code = str(er.get('python_code', ''))
@@ -291,23 +327,23 @@ class AssertionAnalyzer:
             # 搜索接口：验证搜索结果是否与条件匹配
             if fa.api_type == 'search':
                 if any(kw in python_code.lower() for kw in ['records', 'list', 'items', 'results']):
-                    score += 25
+                    score += BIZ_SCORES['search_records']
                 if 'len(' in python_code:
-                    score += 15
+                    score += BIZ_SCORES['search_len']
 
             # 创建接口：验证返回的 ID
             if fa.api_type == 'create':
                 if any(kw in python_code.lower() for kw in ['id', 'created', 'insert']):
-                    score += 25
+                    score += BIZ_SCORES['create_id']
 
             # 分页接口：验证分页参数
             if fa.has_pagination:
                 if any(kw in python_code.lower() for kw in ['page', 'total', 'size']):
-                    score += 20
+                    score += BIZ_SCORES['pagination']
 
             # 验证了错误码（非0场景）
-            if re.search(r'code.*!=\s*0|code.*==\s*\d{2,}', python_code):
-                score += 15
+            if re.search(r'code.*!=\s*0|code.*==\s*\d{3,}', python_code):
+                score += BIZ_SCORES['error_code']
 
         return min(score, 100)
 
@@ -356,7 +392,7 @@ class AssertionAnalyzer:
         # W003: check_json 只验证 code+msg
         if tc.check_type == 'check_json' and isinstance(er, dict):
             fields = set(er.keys())
-            if fields <= {'code', 'msg', 'message'}:
+            if fields <= ONLY_CODE_MSG_FIELDS:
                 if py_has_extra:
                     # .py 有补充断言，降级为 info
                     msg_parts = ['YAML 仅验证 code+msg，但 .py 有补充断言']
@@ -391,7 +427,7 @@ class AssertionAnalyzer:
 
         # W005: 搜索/列表接口不验证返回数据
         if fa.api_type == 'search' and tc.check_type in ('check_json', 'check_code'):
-            if isinstance(er, dict) and set(er.keys()) <= {'code', 'msg', 'message'}:
+            if isinstance(er, dict) and set(er.keys()) <= ONLY_CODE_MSG_FIELDS:
                 if py_has_extra and (fa.py_info.has_field_validation or fa.py_info.has_loop_validation):
                     pass  # .py 已有字段级验证，不再报 critical
                 else:

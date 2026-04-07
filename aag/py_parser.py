@@ -3,8 +3,11 @@
 
 import os
 import re
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,8 +49,7 @@ class PyTestParser:
             with open(py_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except (IOError, UnicodeDecodeError) as e:
-            import sys
-            print(f"  警告: 无法读取 {py_path}: {e}", file=sys.stderr)
+            logger.warning("无法读取 %s: %s", py_path, e)
             return PyAssertionInfo()
 
         info = PyAssertionInfo()
@@ -64,7 +66,26 @@ class PyTestParser:
 
         # 统计 assert 语句（排除模板中的 check_result 调用）
         # 只统计 check_result 之后的 assert
-        post_check_asserts = re.findall(r'assert\s+(.+?)(?:\n|$)', test_body)
+        # 支持多行 assert（括号内换行或 \ 续行）
+        post_check_asserts = []
+        lines = test_body.split('\n')
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if re.match(r'^assert\s+', line):
+                # 收集可能的续行
+                full_line = line
+                open_parens = full_line.count('(') - full_line.count(')')
+                while (full_line.endswith('\\') or open_parens > 0) and i + 1 < len(lines):
+                    i += 1
+                    next_line = lines[i].strip()
+                    full_line = full_line.rstrip('\\') + ' ' + next_line
+                    open_parens = full_line.count('(') - full_line.count(')')
+                # 提取 assert 后面的内容
+                m = re.match(r'^assert\s+(.+)', full_line)
+                if m:
+                    post_check_asserts.append(m.group(1))
+            i += 1
 
         # 过滤掉基础断言（assert code == 200, assert data is not None 等）
         BASIC_ASSERT_PATTERNS = [
@@ -94,8 +115,8 @@ class PyTestParser:
 
         info.is_template_only = False
 
-        # 检测跨接口验证（deepcopy + send_request）
-        if 'deepcopy' in content and 'send_request' in test_body:
+        # 检测跨接口验证（deepcopy + send_request，都必须在测试方法体内）
+        if 'deepcopy' in test_body and 'send_request' in test_body:
             info.has_cross_api_verify = True
 
         # 检测 allure.step 块

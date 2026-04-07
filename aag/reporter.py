@@ -2,6 +2,7 @@
 """报告生成器 - 终端彩色输出 + HTML 报告"""
 
 import os
+import html
 import datetime
 from aag.scorer import ProjectScore, FileScore
 
@@ -250,9 +251,9 @@ class HtmlReporter:
             color = grade_colors[fs.grade]
             file_rows += f"""<tr>
                 <td><span class="grade" style="background:{color}">{fs.grade}</span></td>
-                <td class="filepath">{fs.rel_path}</td>
-                <td>{fs.method}</td>
-                <td>{fs.api_type}</td>
+                <td class="filepath">{html.escape(fs.rel_path)}</td>
+                <td>{html.escape(fs.method)}</td>
+                <td>{html.escape(fs.api_type)}</td>
                 <td>{fs.case_count}</td>
                 <td style="color:{color};font-weight:bold">{fs.total}</td>
                 <td style="color:#ef4444">{fs.critical_count}</td>
@@ -260,17 +261,18 @@ class HtmlReporter:
 
         # 弱断言详情
         weak_details = ""
+        fs_map = {f.file_path: f for f in ps.file_scores}
         for fa in file_analyses:
-            fs = next((f for f in ps.file_scores if f.file_path == fa.test_file.file_path), None)
+            fs = fs_map.get(fa.test_file.file_path)
             if not fs or fs.critical_count == 0:
                 continue
             patterns_html = ""
             for ca in fa.case_analyses:
                 for wp in ca.weak_patterns:
                     sev_color = '#ef4444' if wp.severity == 'critical' else '#eab308'
-                    patterns_html += f'<div class="pattern"><span class="sev" style="color:{sev_color}">[{wp.code}]</span> {wp.message}<br><span class="suggest">💡 {wp.suggestion}</span></div>\n'
+                    patterns_html += f'<div class="pattern"><span class="sev" style="color:{sev_color}">[{html.escape(wp.code)}]</span> {html.escape(wp.message)}<br><span class="suggest">💡 {html.escape(wp.suggestion)}</span></div>\n'
             if patterns_html:
-                weak_details += f'<div class="file-detail"><h4>{fs.rel_path} <span style="color:{grade_colors[fs.grade]}">({fs.total}分)</span></h4>{patterns_html}</div>\n'
+                weak_details += f'<div class="file-detail"><h4>{html.escape(fs.rel_path)} <span style="color:{grade_colors[fs.grade]}">({fs.total}分)</span></h4>{patterns_html}</div>\n'
 
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -345,12 +347,12 @@ td {{ padding:0.75rem; border-bottom:1px solid #1e293b; }}
 
         items = ''
         for sugg in suggestions[:20]:  # 最多展示20条
-            reasons = ''.join(f'<li>{r}</li>' for r in sugg['reasons'])
+            reasons = ''.join(f'<li>{html.escape(r)}</li>' for r in sugg['reasons'])
             # HTML 转义代码块
-            code = sugg['suggested'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            code = html.escape(sugg['suggested'])
             items += f'''<div class="file-detail">
-                <h4>{sugg['file']} — {sugg['summary']}</h4>
-                <p style="color:#94a3b8">原始: <code>{sugg['original']}</code></p>
+                <h4>{html.escape(sugg['file'])} — {html.escape(sugg['summary'])}</h4>
+                <p style="color:#94a3b8">原始: <code>{html.escape(sugg['original'])}</code></p>
                 <p style="color:#f87171">问题:</p>
                 <ul style="color:#fca5a5;font-size:0.85rem;margin:0.5rem 0">{reasons}</ul>
                 <p style="color:#4ade80">建议改为:</p>
