@@ -14,6 +14,7 @@ from aag.analyzer import AssertionAnalyzer
 from aag.scorer import AssertionScorer
 from aag.reporter import TerminalReporter, HtmlReporter
 from aag.suggester import AssertionSuggester
+from aag.upgrader import UpgradeEngine
 
 
 def main():
@@ -72,6 +73,38 @@ def main():
         default=None,
         help='严重问题数超过此值时返回非零退出码（用于 CI 门禁，如: --max-critical 10）',
     )
+    parser.add_argument(
+        '--upgrade',
+        action='store_true',
+        help='执行断言升级',
+    )
+    parser.add_argument(
+        '--level',
+        type=int,
+        choices=[1, 2],
+        default=2,
+        help='升级级别: 1=check_code→check_json, 2=含弱check_json→custom_check（默认2）',
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='预览模式，不实际修改文件',
+    )
+    parser.add_argument(
+        '--no-backup',
+        action='store_true',
+        help='升级时不创建备份文件',
+    )
+    parser.add_argument(
+        '--rollback',
+        action='store_true',
+        help='回滚：将 .bak 文件恢复为原始文件',
+    )
+    parser.add_argument(
+        '--capture',
+        default=None,
+        help='使用 capture 插件抓取的 JSON 文件生成精确断言（如: --capture responses.json）',
+    )
 
     args = parser.parse_args()
 
@@ -79,6 +112,17 @@ def main():
     if not os.path.isdir(args.path):
         print(f"错误: 目录不存在 - {args.path}")
         sys.exit(1)
+
+    # ── 回滚模式 ──
+    if args.rollback:
+        count = UpgradeEngine.rollback_directory(args.path)
+        print(f"\n✅ 已回滚 {count} 个文件")
+        sys.exit(0)
+
+    # ── 升级模式 ──
+    if args.upgrade:
+        _run_upgrade(args)
+        sys.exit(0)
 
     # 1. 解析
     print(f"\n🔍 正在扫描: {args.path}")
@@ -266,6 +310,55 @@ def _print_detail(file_analyses, project_score):
 
     except ImportError:
         print("\n详细模式需要 rich 库: pip install rich")
+
+
+def _run_upgrade(args):
+    """执行断言升级"""
+    engine = UpgradeEngine(
+        level=args.level,
+        dry_run=args.dry_run,
+        no_backup=args.no_backup,
+        capture_file=args.capture,
+    )
+
+    mode = "预览" if args.dry_run else "执行"
+    capture_hint = "（使用 capture 数据）" if args.capture else ""
+    print(f"\n🔧 正在{mode} Level {args.level} 断言升级{capture_hint}...")
+    print(f"   扫描目录: {args.path}")
+
+    summary = engine.upgrade_directory(args.path)
+
+    # 输出结果
+    print(f"\n{'=' * 60}")
+    print(f"  断言升级{'预览' if args.dry_run else '完成'}")
+    print(f"{'=' * 60}")
+    print(f"  扫描文件: {summary.total_files_scanned}")
+    print(f"  升级文件: {summary.files_upgraded}")
+    print(f"  升级用例: {summary.cases_upgraded}")
+    print(f"  跳过用例: {summary.cases_skipped}")
+    print(f"  升级前平均分: {summary.avg_score_before}")
+    print()
+
+    # 显示升级详情
+    for result in summary.results:
+        if result.upgraded_count == 0:
+            continue
+        upgraded = [d for d in result.decisions if not d.skip_reason]
+        levels = set(d.level for d in upgraded)
+        level_str = '/'.join(f'L{l}' for l in sorted(levels))
+        print(f"  ✅ {result.rel_path}  [{result.api_type}]  +{result.upgraded_count} 用例 ({level_str})")
+        for d in upgraded:
+            print(f"     {d.summary}: {d.original_check_type} → {d.target_check_type}")
+
+    # 显示跳过的文件（仅当 verbose 时可以扩展）
+    skipped_files = [r for r in summary.results if r.upgraded_count == 0 and r.skipped_count > 0]
+    if skipped_files:
+        print(f"\n  跳过 {len(skipped_files)} 个文件（已有足够断言或不满足升级条件）")
+
+    if args.dry_run:
+        print(f"\n💡 以上为预览，实际执行请去掉 --dry-run 参数")
+    else:
+        print(f"\n💡 如需回滚，运行: python3 aag_cli.py -p {args.path} --rollback")
 
 
 if __name__ == '__main__':

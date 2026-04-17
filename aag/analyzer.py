@@ -58,12 +58,20 @@ BIZ_SCORES = {
 }
 
 
-# 接口类型关键词
-SEARCH_KEYWORDS = ['search', 'list', 'query', 'find', 'get', 'all', 'page']
+# 接口类型关键词（全词匹配，避免子串误判如 get 匹配 budget）
+SEARCH_KEYWORDS = ['search', 'list', 'query', 'find', 'page', 'getall', 'getlist']
 CREATE_KEYWORDS = ['add', 'create', 'insert', 'save', 'register', 'import']
 UPDATE_KEYWORDS = ['update', 'edit', 'modify', 'put', 'patch', 'switch']
 DELETE_KEYWORDS = ['delete', 'remove', 'destroy', 'cancel']
+DETAIL_KEYWORDS = ['get', 'detail', 'info', 'view', 'show', 'fetch', 'profile']
+ACTION_KEYWORDS = ['send', 'submit', 'execute', 'run', 'trigger', 'apply',
+                   'enable', 'disable', 'activate', 'deactivate', 'verify',
+                   'confirm', 'approve', 'reject', 'publish', 'unpublish',
+                   'export', 'download', 'upload', 'sync', 'refresh', 'retry']
 PAGINATION_KEYWORDS = ['pageNo', 'pageSize', 'page_no', 'page_size', 'offset', 'limit']
+
+# 路径中的 ID 占位符模式（/123, /{id}, /:id）
+_ID_IN_PATH_RE = re.compile(r'/(\d+|{\w+}|:\w+)/?$')
 
 
 @dataclass
@@ -477,26 +485,51 @@ class AssertionAnalyzer:
     # ── 辅助方法 ──────────────────────────────────────────
 
     def _detect_api_type(self, tf: TestFile) -> str:
-        """根据接口地址和方法推断接口类型"""
-        addr = tf.address.lower()
-        title = tf.title.lower()
+        """根据接口地址和方法推断接口类型
+
+        优先级：关键词匹配 > 路径模式 > HTTP 方法兜底
+        """
+        addr = tf.address
+        title = tf.title
         combined = addr + ' ' + title
 
-        if any(kw in combined for kw in SEARCH_KEYWORDS):
-            return 'search'
-        if any(kw in combined for kw in CREATE_KEYWORDS):
-            return 'create'
-        if any(kw in combined for kw in UPDATE_KEYWORDS):
-            return 'update'
-        if any(kw in combined for kw in DELETE_KEYWORDS):
-            return 'delete'
+        # 先做驼峰/帕斯卡拆词，再做分隔符切分，避免 createOrder/getUserList 无法命中关键词
+        combined = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', combined)
+        combined = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', combined)
 
-        # 根据 HTTP 方法推断
-        if tf.method == 'GET':
+        # 用分词集合做全词匹配，避免子串误判（如 get 匹配 budget）
+        tokens = {
+            tok.lower()
+            for tok in re.split(r'[\s/\-_.?=&:]+', combined)
+            if tok
+        }
+
+        # 第一优先级：关键词匹配（最准确）
+        if tokens & set(SEARCH_KEYWORDS):
             return 'search'
+        if tokens & set(CREATE_KEYWORDS):
+            return 'create'
+        if tokens & set(UPDATE_KEYWORDS):
+            return 'update'
+        if tokens & set(DELETE_KEYWORDS):
+            return 'delete'
+        if tokens & set(DETAIL_KEYWORDS):
+            return 'detail'
+        if tokens & set(ACTION_KEYWORDS):
+            return 'action'
+
+        # 第二优先级：路径模式
+        # URL 以 /123 或 /{id} 或 /:id 结尾 → 大概率是详情或单资源操作
+        has_id_in_path = bool(_ID_IN_PATH_RE.search(addr.lower()))
+
+        # 第三优先级：HTTP 方法兜底
+        if tf.method == 'GET':
+            return 'detail' if has_id_in_path else 'search'
         if tf.method == 'POST':
-            # POST 可能是搜索也可能是创建，看地址
-            if 'search' in addr or 'list' in addr or 'query' in addr:
+            if has_id_in_path:
+                return 'action'
+            # POST 无 ID → 看参数中是否有分页字段来区分 search 和 create
+            if self._detect_pagination(tf):
                 return 'search'
             return 'create'
         if tf.method in ('PUT', 'PATCH'):
